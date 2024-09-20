@@ -1,0 +1,11 @@
+.env
+/node_modules
+package-lock.json
+/API/venv
+/API/__pycache__
+/API/store
+anon.*
+bot.session
+*.session
+venv
+env
