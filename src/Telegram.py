@@ -36,7 +36,7 @@ class Telegram:
                     return {"success": False, "error": "Password is required for two-step verification."}
                 await client.sign_in(phone_number, password=password)
                 return {"success": True, "message": "Successfully signed in with password."}
-            return {"success": False, "error": "Unexpected error occurred."}
+            return {"success": False, "error": "Unexpected error occurred., {}".format(str(e))}
         finally:
             await client.disconnect()
 

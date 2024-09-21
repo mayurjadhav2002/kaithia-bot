@@ -9,3 +9,4 @@ bot.session
 *.session
 venv
 env
+src/__pycache__
