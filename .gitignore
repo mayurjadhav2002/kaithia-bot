@@ -10,3 +10,5 @@ bot.session
 venv
 env
 src/__pycache__
+*.lock
+*.pyc
