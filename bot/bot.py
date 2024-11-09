@@ -90,8 +90,21 @@ async def handle_new_session(session_file):
     await load_client_for_session(session_file)
 
 
+typing_timers = {}  # Store timers per user to handle debouncing
 
+DEBOUNCE_TIME = 2 
 # It checks for new session file and loads the client
+async def process_message_after_delay(user_id, message, client):
+    """Process the message after a debounce delay."""
+    await asyncio.sleep(DEBOUNCE_TIME)  
+
+    modified_message = f"Modified: {message}"
+
+    logging.info(f"Sending modified message to {user_id}: {modified_message}")
+
+    await client.send_message(user_id, modified_message)
+    
+    
 async def load_client_for_session(session_file):
     global clients
     
@@ -105,7 +118,7 @@ async def load_client_for_session(session_file):
         if not await client.is_user_authorized():
             logging.warning(f"Session for {session_file} is not authorized, login required.")
             await client.disconnect()
-            os.remove(session_path)  # Delete the unauthorized session file
+            os.remove(session_path)  
             logging.info(f"Deleted unauthorized session file: {session_path}")
             return
 
@@ -113,6 +126,16 @@ async def load_client_for_session(session_file):
 
         @client.on(events.NewMessage)
         async def handle_message(event):
+            user_id = event.sender_id
+            message = event.raw_text
+            
+            logging.info(f"Received message from {user_id}: {message}")
+
+            if user_id in typing_timers:
+                typing_timers[user_id].cancel()
+
+            typing_timers[user_id] = asyncio.create_task(process_message_after_delay(user_id, message, client))
+
             await check_command(event, client)
 
         await client.start()

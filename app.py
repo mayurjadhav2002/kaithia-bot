@@ -1,76 +1,145 @@
-from flask import Flask, request, jsonify
-from src.Telegram import Telegram
+import subprocess
+import time
 import os
-import requests
-import asyncio
-from dotenv import load_dotenv
-from flask_cors import CORS
+from telebot import TeleBot, types
+from db.connect import db 
+from datetime import datetime
+import bcrypt
+import signal
+import sys
 
-load_dotenv()
+bot = TeleBot(os.getenv("TELEGRAM_BOT_API_KEY"))
 
+default_avatar = f"{os.getenv('BACKEND_URL')}/uploads/default.png"
 
-api_id = os.getenv('TELEGRAM_APP_API_ID')
-api_hash = os.getenv('TELEGRAM_APP_API_HASH')
-node_backend = os.getenv('BACKEND_URL')
-telegram_service = Telegram(api_id, api_hash)
+def hash_password(password):
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
+def authenticate(stored_password, password):
+    return bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8'))
 
-app = Flask(__name__)
-CORS(app)
+def find_user(query):
+    return db['users'].find_one(query)
 
+def save_user(user_data):
+    user_data["createdAt"] = datetime.now()
+    user_data["updatedAt"] = datetime.now()
+    db['users'].insert_one(user_data)
 
+@bot.message_handler(commands=['start'])
+def start_handler(message):
+    user = message.from_user
+    full_name = f"{user.first_name} {user.last_name or ''}"
+    welcome_message = (f"<b>Welcome to Kaithia Bot, {full_name}!</b>\n\n"
+                       f"Kaithia Bot helps you manage groups and provides useful features to enhance your Telegram experience. "
+                       f"Here are the commands you can use:\n\n"
+                       f"Enjoy using Kaithia Bot!")
 
-async def update_backend_with_phone(userId, phone_number):
-    try:
-        response = requests.post(f"{node_backend}/api/update_phone", json={"userId": userId, "phone_number": phone_number})
-        return response.json()
-    except Exception as e:
-        return {"success": False, "message": "Error updating backend"}
+    if not find_user({"userId": user.id}):
+        user_data = {
+            "first_name": user.first_name or '',
+            "last_name": user.last_name or '',
+            "username": user.username or '',
+            "userId": user.id,
+            "password": None,
+            "avatar": default_avatar,
+            "password_reset": "",
+            "password_reset_token": "",
+            "date": "",
+            "hasSession": False,
+            "phone_code_hash": ""
+        }
+        save_user(user_data)
 
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🤝 Join", callback_data="join"))
+    markup.add(types.InlineKeyboardButton("❓ Help", callback_data="help"))
+    
+    bot.send_message(message.chat.id, welcome_message, parse_mode="HTML", reply_markup=markup)
 
+@bot.callback_query_handler(func=lambda call: call.data == "join")
+def join_handler(call):
+    user_id = call.from_user.id
+    join_url = f"https://kaithia.vercel.app?u={user_id}"
+    full_name = f"{call.from_user.first_name or 'explorer'} {call.from_user.last_name or ''}"
 
+    join_message = (f"✅ Great to see you onboard, {full_name}! You can easily connect with others and explore all the features of Kaithia Bot.\n\n"
+                    f"Open Link to Sign Up: [Join Here]({join_url})")
 
-@app.route('/request_otp', methods=['POST'])
-async def request_otp():
-    phone_number = request.json.get('phone_number')
-    userId = request.json.get('userId')
-    if not phone_number:
-        return jsonify({"error": "Phone number is required."}), 400
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🌐 Open Link", url=join_url))
 
-    try:
-        result = await telegram_service.request_otp(phone_number)
-        await update_backend_with_phone(userId, phone_number)
-        return jsonify(result), 200
-    except Exception as e:
-        return jsonify({"success": False, "message": "Internal Server Error", "error": str(e)}), 500
+    bot.send_message(call.message.chat.id, join_message, parse_mode="Markdown", reply_markup=markup)
 
+@bot.callback_query_handler(func=lambda call: call.data == "help")
+@bot.message_handler(commands=['help'])
+def help_handler(message):
+    help_message = (f"🆘 Understanding Kaithia. Here are the instructions:\n\n"
+                    f"👋 <b>/start</b> - Initialize or start Kaithia Bot.\n\n"
+                    f"🤝 <b>/join</b> - Opens a sign-up window.\n\n"
+                    f"👥 <b>/group [groupname]</b> - Create a group.\n\n"
+                    f"❓ <b>/help</b> - Get information about the available commands.\n\n"
+                    f"🔒 <b>/security</b> - Learn about data and security.\n\n"
+                    f"Need further assistance? Reach out to <b>@mayur8908</b>")
 
+    bot.send_message(message.chat.id, help_message, parse_mode="HTML")
 
-@app.route('/verify_otp', methods=['POST'])
-async def verify_otp():
-    phone_number = request.json.get('phone_number')
-    otp = request.json.get('otp')
-    phone_code_hash = request.json.get('phone_code_hash')
-    password = request.json.get('password')
+@bot.message_handler(commands=['security'])
+def security_handler(message):
+    security_message = (f"<b>Security and Data Usage</b>\n\n"
+                        f"At Kaithia Bot, we take your privacy and security seriously:\n\n"
+                        f"<b>Phone Number, OTP, and 2FA:</b> Required but not stored.\n\n"
+                        f"<b>Basic Information:</b> We store your username, first name, and last name.\n\n"
+                        f"<b>Message Listening:</b> Kaithia Bot listens to your messages but does not store them.\n\n"
+                        f"<b>Security and Infrastructure:</b> Our services are highly secured.")
 
-    if not phone_number or not otp or not phone_code_hash:
-        return jsonify({"error": "Phone number, OTP, and phone_code_hash are required."}), 400
+    bot.send_message(message.chat.id, security_message, parse_mode="HTML")
 
-    try:
-        result = await telegram_service.verify_otp(phone_number, otp, phone_code_hash, password)
-        return jsonify(result), 200
-    except Exception as e:
-        app.logger.error(f"Error verifying OTP: {str(e)}")
-        return jsonify({"error": f"Error verifying OTP: {str(e)}", "success": False}), 500
+@bot.message_handler(commands=['join'])
+def join_command_handler(message):
+    join_url = f"https://kaithia.vercel.app?u={message.from_user.id}"
+    join_message = f"✅ You have chosen to join! Access the link here: [Join Here]({join_url})"
 
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🌐 Open Link", url=join_url))
 
+    bot.send_message(message.chat.id, join_message, parse_mode="Markdown", reply_markup=markup)
 
+@bot.message_handler(func=lambda message: message.text.lower() == 'hi')
+def hi_handler(message):
+    bot.send_message(message.chat.id, "👋 Hey there!")
 
-@app.route("/", methods=['GET'])
-def index():
-    return jsonify({"success": True, "message": "Hello, World!"}), 200
+def shutdown(signum, frame):
+    bot.stop_polling()
+    sys.exit(0)
 
+def start_flask():
+    return subprocess.Popen(['python', 'bot/api.py'])
 
+def start_telegram_bot():
+    return subprocess.Popen(['python', 'bot/bot.py'])
 
+def main():
+    
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    bot.polling()
+    
+   
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+
+    flask_app = start_flask()
+    telegram_app = start_telegram_bot()
+
+    while True:
+        if flask_app.poll() is not None: 
+            print('Flask app exited. Restarting...')
+            flask_app = start_flask()
+        
+        if telegram_app.poll() is not None:
+            print('Telegram bot exited. Restarting...')
+            telegram_app = start_telegram_bot()
+        
+        time.sleep(1)
+    main()
