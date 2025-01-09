@@ -7,7 +7,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import re
 import subprocess
-
+from handlers import Handlers
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -19,70 +19,22 @@ api_hash = os.getenv('TELEGRAM_APP_API_HASH')
 session_dir = 'store'
 clients = []
 
-
+Handler = Handlers()
 async def check_command(event, client):
     sender = await event.get_sender()
     me = await client.get_me()
 
     if sender.id != me.id:
         return
-
-    if event.message.text.startswith("/group") and event.message.to_id.user_id != sender.id:
-        try:
-            
-            kaithia_message = await event.message.edit(
-                f"<b>@kaithia_bot</b> is creating the <code>/group</code>...",
-                parse_mode='HTML')
-
-            command_parts = event.message.text.split(" ", 1)
-
-            group_command = command_parts[1] if len(command_parts) > 1 else ""
-            add_kaithia = "@kaithia" in group_command
-            group_command = group_command.replace("@kaithia", "").strip()
-
-            recipient_id = event.message.to_id.user_id
-            recipient = await event.client.get_entity(recipient_id)
-            recipient_first_name = getattr(recipient, 'first_name', None)
-
-            group_name = group_command if group_command else f"{sender.first_name} <> {recipient_first_name}"
-            participants = [sender, recipient]
-
-            if add_kaithia:
-                participants.append("@kaithia_bot")
-
-            created_group = await event.client(
-                functions.messages.CreateChatRequest(title=group_name,
-                                                     users=participants))
-            group_details = created_group.stringify()
-            
-            chat_id_match = re.search(r'peerchat\s*\(\s*chat_id\s*=\s*(\d+)\s*\)', group_details, re.IGNORECASE)
-            
-            if chat_id_match:
-                chat_id = int(chat_id_match.group(1))
-                await event.client(functions.messages.EditChatAboutRequest(
-                        peer=types.PeerChat(chat_id),
-                        about="Created by @kaithia_bot"
-                        ))
-                
-                result = await client(functions.messages.ExportChatInviteRequest(
-                        peer=types.PeerChat(chat_id=chat_id),
-                        legacy_revoke_permanent=True
-                        )) 
-                invite_link = result.link
-                
-                await kaithia_message.edit(f"<b>@kaithia_bot</b> created group <b>{group_name}</b> successfully! \n\n Join the group using the link below: {invite_link}", parse_mode='HTML')
-           
-            else:
-                await kaithia_message.edit(
-                    f"<b>@Kaithia</b> created group <b>{group_name}</b> successfully!",
-                    parse_mode='HTML')
-        except Exception as e:
-            logging.error(f"Error creating group: {str(e)}")
-            if event.message:
-                await event.message.edit(f"Failed to create group: {str(e)}")
+    
+    if event.message.text.contains("kaithia") and event.message.to_id.user_id != sender.id:
+        await Handler.generate_text(event, sender, client)
+    
+ 
+        
 
 
-# it handles new session file created by Flask app
+
 async def handle_new_session(session_file):
     logging.info(f"New session file detected: {session_file}. Waiting for 1 minute...")
     
@@ -90,10 +42,11 @@ async def handle_new_session(session_file):
     await load_client_for_session(session_file)
 
 
-typing_timers = {}  # Store timers per user to handle debouncing
+typing_timers = {}  
 
 DEBOUNCE_TIME = 2 
-# It checks for new session file and loads the client
+
+
 async def process_message_after_delay(user_id, message, client):
     """Process the message after a debounce delay."""
     await asyncio.sleep(DEBOUNCE_TIME)  
